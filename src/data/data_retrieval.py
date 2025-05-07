@@ -250,6 +250,10 @@ class StockDataRetriever:
         # Convert to DataFrame
         df = pd.DataFrame(results)
         
+        # Print some debug information
+        print(f"Total data points received: {len(df)}")
+        print(f"Date range: {df['t'].min()} to {df['t'].max()}")
+        
         # Rename columns to match our standard format
         df.rename(columns={
             "o": "open",
@@ -264,29 +268,25 @@ class StockDataRetriever:
         # Convert timestamp (milliseconds) to datetime
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
         
+        # Sort by datetime to ensure chronological order
+        df = df.sort_values('datetime')
+        
+        # Print sample of data points
+        print("\nSample of data points:")
+        print(df[['datetime', 'open', 'close', 'volume']].head())
+        
         # Drop unnecessary columns
         df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
         
-        return df.sort_values('datetime')
+        return df
     
     def get_multi_week_intraday_data(self, symbol, weeks=2, interval="1min"):
         """
         Get multiple weeks of intraday data by combining multiple API calls if needed.
-        
-        Args:
-            symbol (str): The stock symbol
-            weeks (int): Number of weeks of data to retrieve
-            interval (str): Time interval between data points
-            
-        Returns:
-            pandas.DataFrame: Combined DataFrame with all intraday data
         """
         print(f"Retrieving {weeks} weeks of {interval} data for {symbol}...")
         
         if self.api_provider == "polygon":
-            # For Polygon, we need to adjust our approach for multi-week retrieval
-            # as their API has different date range limitations
-            
             # Calculate dates
             end_date = datetime.now()
             all_data = []
@@ -296,11 +296,14 @@ class StockDataRetriever:
             chunk_size = 30  # days per request
             total_days = weeks * 7
             
+            print(f"Total days requested: {total_days}")
+            print(f"Current end date: {end_date.date()}")
+            
             for i in range(0, total_days, chunk_size):
                 chunk_end = end_date - timedelta(days=i)
                 chunk_start = chunk_end - timedelta(days=min(chunk_size, total_days - i))
                 
-                print(f"Fetching data chunk from {chunk_start.date()} to {chunk_end.date()}")
+                print(f"\nFetching data chunk from {chunk_start.date()} to {chunk_end.date()}")
                 
                 # Format dates
                 start_str = chunk_start.strftime('%Y-%m-%d')
@@ -324,10 +327,22 @@ class StockDataRetriever:
                     continue
                 
                 data = response.json()
+                
+                # Add more detailed error checking
+                if data.get('status') == 'ERROR':
+                    print(f"API returned an error: {data.get('error')}")
+                    continue
+                    
                 results = data.get('results', [])
                 
                 if results:
                     df_chunk = pd.DataFrame(results)
+                    
+                    # Print date range of this chunk
+                    if 't' in df_chunk.columns:
+                        min_date = pd.to_datetime(df_chunk['t'].min(), unit='ms').date()
+                        max_date = pd.to_datetime(df_chunk['t'].max(), unit='ms').date()
+                        print(f"Chunk data range: {min_date} to {max_date}")
                     
                     # Rename columns
                     df_chunk.rename(columns={
@@ -360,7 +375,13 @@ class StockDataRetriever:
             df = df.drop_duplicates(subset='datetime')
             
             # Sort by datetime
-            return df.sort_values('datetime')
+            df = df.sort_values('datetime')
+            
+            # Print final date range
+            print(f"\nFinal data range: {df['datetime'].min().date()} to {df['datetime'].max().date()}")
+            print(f"Total data points: {len(df)}")
+            
+            return df
             
         else:
             # Alpha Vantage approach
@@ -388,58 +409,34 @@ class StockDataRetriever:
                 # Return what we have, sorted by datetime
                 return df.sort_values('datetime')
     
-    def save_to_csv(self, df, filename=None):
+    def save_data(self, df, filename=None):
         """
-        Save DataFrame to CSV file with properly formatted datetime values.
-        """
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"stock_data_{timestamp}.csv"
-        
-        # Ensure the directory exists
-        os.makedirs("data/output", exist_ok=True)
-        
-        # Format datetime column for Excel
-        df_to_save = df.copy()
-        if 'datetime' in df_to_save.columns:
-            df_to_save['datetime'] = df_to_save['datetime'].dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Save to CSV
-        filepath = f"data/output/{filename}"
-        df_to_save.to_csv(filepath, index=False)
-        
-        return filepath
-    
-    def save_to_excel(self, df, filename=None):
-        """
-        Save DataFrame to Excel file.
+        Save DataFrame to CSV file.
         
         Args:
             df (pandas.DataFrame): DataFrame to save
             filename (str, optional): Name of the file. If None, a default name will be generated.
             
         Returns:
-            str: Path to the saved file
+            str: Path to the saved CSV file
         """
         if filename is None:
             # Generate a default filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"stock_data_{timestamp}.xlsx"
+            filename = f"stock_data_{timestamp}"
         else:
-            # Make sure it has the xlsx extension
-            if not filename.endswith('.xlsx'):
-                filename = filename.replace('.csv', '.xlsx')
-                if not filename.endswith('.xlsx'):
-                    filename += '.xlsx'
+            # Remove any existing extensions
+            filename = filename.replace('.csv', '')
         
         # Ensure the directory exists
         os.makedirs("data/output", exist_ok=True)
         
-        # Save to Excel
-        filepath = f"data/output/{filename}"
-        df.to_excel(filepath, index=False, engine='openpyxl')
+        # Save to CSV
+        csv_filepath = f"data/output/{filename}.csv"
+        df.to_csv(csv_filepath, index=False)
         
-        return filepath
+        return csv_filepath
+    
 
 # Example usage
 if __name__ == "__main__":
@@ -454,19 +451,18 @@ if __name__ == "__main__":
     print("Polygon API key saved for future use.")
     
     # Example: Get 2 weeks of minute data for Apple
-    symbol = input("Enter stock symbol (default: AAPL): ") or "AAPL"
+    symbol = input("Enter stock symbol (default: AAPL): ") or "SPY"
     weeks = int(input("Number of weeks of data to retrieve (default: 2): ") or "2")
     interval = input("Data interval in minutes (1, 5, 15, 30, 60) (default: 1): ") or "1"
     
     stock_data = retriever.get_multi_week_intraday_data(symbol, weeks=weeks, interval=f"{interval}")
     
     # Generate filename
-    filename = f"{symbol}_{weeks}weeks_{interval}min_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"{symbol}_{weeks}weeks_{interval}min_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    # Save to Excel
-    filepath = retriever.save_to_excel(stock_data, filename)
-    print(f"Data saved to {filepath}")
-    print(f"Retrieved {len(stock_data)} data points")
+    # Save to CSV
+    csv_path = retriever.save_data(stock_data, filename)
+    print(f"Data saved to CSV: {csv_path}")
     
     # Show sample
     print("\nSample data:")
